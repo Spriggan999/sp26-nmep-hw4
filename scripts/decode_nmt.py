@@ -58,9 +58,9 @@ def main():
     num_layers = 6
     num_heads = 8
     embedding_dim = 512
-    ffn_hidden_dim = 4*512
-    qk_length = 512
-    value_length = 512
+    ffn_hidden_dim = 4 * embedding_dim
+    qk_length = embedding_dim // num_heads
+    value_length = embedding_dim // num_heads
     max_length = 200
     dropout = 0.1
 

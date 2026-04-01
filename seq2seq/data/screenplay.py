@@ -11,47 +11,55 @@ tokenizer = BPETokenizer(model="gpt2")
 
 
 class ScreenplayDataset(Dataset):
-    def __init__(self, screenplay_path: Path, verbose: bool = False):
-        self.paragraphs = []
-        for path in screenplay_path.glob("*.txt"):
-            num_para = 0
-            with open(path, "r") as f:
-                current_paragraph = []
-                for line in f:
-                    if line.isspace():
-                        if current_paragraph and current_paragraph[-1][-1].isspace():
-                            if num_para == 0:
-                                current_paragraph.insert(0, tokenizer.bos_token)
-                            self.paragraphs.append("".join(current_paragraph))
-                            current_paragraph = []
-                            num_para += 1
-                        else:
-                            current_paragraph.append("\n")
-                    else:
-                        current_paragraph.append(line)
-                self.paragraphs[-1] = self.paragraphs[-1] + tokenizer.eos_token
+    def __init__(
+        self,
+        screenplay_path,
+        block_size,
+        verbose = False,
+    ):
+        self.block_size = block_size
+
+        all_tokens = []
+
+        txt_files = sorted(screenplay_path.glob("*.txt"))
+
+        for path in txt_files:
+            text = path.read_text(encoding="utf-8")
+
+            file_tokens = []
+            file_tokens.append(tokenizer.bos_token_id)
+            file_tokens.extend(tokenizer.encode(text).tolist())
+            file_tokens.append(tokenizer.eos_token_id)
+
+            all_tokens.extend(file_tokens)
+
             if verbose:
-                print(path, num_para)
+                print(path, len(file_tokens))
 
-        while "\n" in self.paragraphs:
-            self.paragraphs.remove("\n")
+        self.tokens = torch.tensor(all_tokens, dtype=torch.long)
 
-        original_len = len(self.paragraphs)
+        # Need block_size + 1 tokens per sample so we can shift by 1
+        if len(self.tokens) < self.block_size + 1:
+            raise ValueError(
+                f"Corpus too small: need at least {self.block_size + 1} tokens, "
+                f"got {len(self.tokens)}"
+            )
 
-        while len(self.paragraphs) > 0.1 * original_len:
-            r_idx = torch.randint(0, len(self.paragraphs) - 1, (1,))[0].item()
-            self.paragraphs[r_idx : r_idx + 2] = [
-                "".join(self.paragraphs[r_idx : r_idx + 2])
-            ]
+        self.start_idxs = list(
+            range(0, len(self.tokens) - (self.block_size + 1) + 1, self.block_size)
+        )
+
+        print(f"Total tokens: {len(self.tokens)}")
+        print(f"Num samples: {len(self.start_idxs)}")
+        print(f"Block size: {self.block_size}")
 
     def __len__(self):
-        return len(self.paragraphs)
+        return len(self.start_idxs)
 
     def __getitem__(self, idx: int):
-        para = self.paragraphs[idx]
-        # print(repr(para))
-        para_tok = tokenizer.encode(para)
-        return para_tok
+        start = self.start_idxs[idx]
+        end = start + self.block_size + 1
+        return self.tokens[start:end]
 
 
 def collate_fn(batch):
@@ -60,7 +68,9 @@ def collate_fn(batch):
 
 
 if __name__ == "__main__":
-    data = ScreenplayDataset(Path("data/lm/"), verbose=True)
+    data = ScreenplayDataset(Path("data/lm/"), 512, verbose=True)
+
+    print("Samples: ", len(data))
 
     idx = torch.randint(0, len(data), (10,)).tolist()
 
