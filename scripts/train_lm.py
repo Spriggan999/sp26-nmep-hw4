@@ -12,8 +12,8 @@ from seq2seq.transformer.transformer import Decoder
 from seq2seq.data.screenplay import ScreenplayDataset, collate_fn, tokenizer
 
 run = wandb.init(
-    entity="<INSERT ENTITY HERE>",
-    project="transformer",
+    entity="ysaxena_personal",
+    project="sp26-nmep-hw4",
     config={
         "learning_rate": 0.00005,
         "architecture": "transformer-lm-gpt",
@@ -115,7 +115,7 @@ def train_lm():
     ).to(device)
 
     # TODO: loss shouldn't include pad tokens, so it should ignore pad token ids
-    criterion = nn.CrossEntropyLoss(ignore_index=...)
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
     optimizer = optim.AdamW(model.parameters(), lr=base_lr, betas=[0.9, 0.98], eps=1e-9)
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
 
@@ -129,7 +129,7 @@ def train_lm():
                 paragraph = paragraph.to(device)
 
                 para_input = paragraph[:, :-1]
-                para_output = ...  # TODO: copy/modify the line from train_nmt.py
+                para_output = paragraph[:, 1:]  # TODO: copy/modify the line from train_nmt.py
 
                 optimizer.zero_grad()
 
@@ -144,6 +144,7 @@ def train_lm():
                     output.reshape(-1, vocab_size), para_output.reshape(-1)
                 )
                 loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Added Norm Clipping to stop gradient explosion
                 optimizer.step()
                 scheduler.step()
 
