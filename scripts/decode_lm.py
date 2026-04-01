@@ -3,21 +3,31 @@ import torch
 from seq2seq.transformer.transformer import Decoder
 from seq2seq.data.screenplay import tokenizer
 
+def make_no_peak_mask(q, k, device=0):
+    # Create a look-ahead mask to prevent attending to future tokens
+    len_q, len_k = q.size(1), k.size(1)
+    mask = torch.triu(
+        torch.ones(len_q, len_k, device=device, dtype=torch.bool), diagonal=1
+    )
+    return mask
 
-def decode(model, start_tokens=None, max_len=1000, device="cpu", mode="top_p"):
+
+def decode(model, max_length, start_tokens=None, gen_len=2000, device="cpu", mode="top_p", temperature=0.8):
     model.eval()
     if start_tokens is None:
         # Start with the beginning of sequence token if no prompt is given
         tgt_tokens = [tokenizer.bos_token_id]
     else:
-        tgt_tokens = start_tokens
+        tgt_tokens = [tokenizer.bos_token_id] + start_tokens
 
-    for _ in range(max_len):
-        tgt_tensor = torch.tensor([tgt_tokens]).to(device)
+    for _ in range(gen_len):
+        tgt_tensor = torch.tensor([tgt_tokens]).to(device)[:, -max_length:]
+        tgt_mask = make_no_peak_mask(tgt_tensor, tgt_tensor, device)
+
         with torch.no_grad():
-            output = model(tgt_tensor)
+            output = model(tgt_tensor, tgt_mask=tgt_mask)
 
-        next_token_logits = output[0, -1, :]
+        next_token_logits = output[0, -1, :].clone() / temperature
 
         if mode == "top_k":
             indices_to_remove = (
@@ -66,10 +76,10 @@ def main():
     num_layers = 6
     num_heads = 8
     embedding_dim = 512
-    ffn_hidden_dim = 512
-    qk_length = 512
-    value_length = 512
-    max_length = 5000
+    ffn_hidden_dim = 512 * 4
+    qk_length = 512 // 8
+    value_length = 512 // 8
+    max_length = 512
     dropout = 0.1
 
     # Instantiate the model
@@ -113,12 +123,9 @@ def main():
     start_tokens = tokenizer.encode(start_prompt).tolist()
     print(start_prompt, sep="", end="")
     _generated_text = decode(
-        model, start_tokens=start_tokens, max_len=1000, device=device
+        model, max_length, start_tokens=start_tokens, gen_len=2000, device=device, mode="top_k", temperature=0.5
     )
     print()
-
-    # Generate text from scratch
-    # generated_text = decode(model, max_len=300, device=device)
 
 
 if __name__ == "__main__":

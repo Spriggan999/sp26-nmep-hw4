@@ -18,7 +18,7 @@ run = wandb.init(
         "learning_rate": 0.00005,
         "architecture": "transformer-lm-gpt",
         "dataset": "screenplay",
-        "epochs": 10,
+        "epochs": 100,
     },
 )
 
@@ -76,9 +76,12 @@ def make_no_peak_mask(q, k, device=0):
 def train_lm():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    block_size = 512  # each sample has a fixed length of block_size input tokens
+    batch_size = 16
+
     data_path = Path("data/lm/")
-    dataset = ScreenplayDataset(data_path)
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=collate_fn)
+    dataset = ScreenplayDataset(data_path, block_size)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
     vocab_size = len(tokenizer.vocab)
     num_layers = 6
@@ -87,12 +90,12 @@ def train_lm():
     ffn_hidden_dim = 4 * embedding_dim  # standard practice
     qk_length = embedding_dim // num_heads # standard practice (note that qk_length is a per-head dqk)
     value_length = embedding_dim // num_heads # standard practice
-    max_length = 5000
+    max_length = block_size  # no point in having max_length > block_size, because all samples are block_size length
     dropout = 0.1
     epochs = 100
 
     warmup_steps = 4000
-    base_lr = 5e-5
+    base_lr = 3e-4
 
     def lr_lambda(step):
         if step == 0:
@@ -119,48 +122,66 @@ def train_lm():
     optimizer = optim.AdamW(model.parameters(), lr=base_lr, betas=[0.9, 0.98], eps=1e-9)
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
 
+    global_step = 0
+
     # train over all epochs, checkpointing every 25 epochs
     for epoch in range(epochs):
         model.train()
         total_loss = 0
         data_tqdm = tqdm(dataloader)
-        for i, paragraph in enumerate(data_tqdm):
+        for i, batch in enumerate(data_tqdm):
             try:
-                paragraph = paragraph.to(device)
+                batch = batch.to(device)
 
-                para_input = paragraph[:, :-1]
-                para_output = ...  # TODO: copy/modify the line from train_nmt.py
+                batch_input = batch[:, :-1]
+                batch_output = ...  # TODO: same idea from train_nmt.py
 
                 optimizer.zero_grad()
 
-                trg_pad_mask = make_pad_mask(para_input, para_input)
-                trg_no_peak_mask = make_no_peak_mask(para_input, para_input)
+                trg_pad_mask = make_pad_mask(batch_input, batch_input)
+                trg_no_peak_mask = make_no_peak_mask(batch_input, batch_input)
 
                 trg_mask = trg_pad_mask | trg_no_peak_mask
 
-                output = model(para_input, tgt_mask=trg_mask)
+                output = model(batch_input, tgt_mask=trg_mask)
 
                 loss = criterion(
-                    output.reshape(-1, vocab_size), para_output.reshape(-1)
+                    output.reshape(-1, vocab_size), batch_output.reshape(-1)
                 )
+
                 loss.backward()
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # gradient clipping
+
                 optimizer.step()
                 scheduler.step()
 
+                global_step += 1
                 total_loss += loss.item()
-                data_tqdm.set_postfix({"loss": loss})
-                run.log({"loss": loss})
+
+                data_tqdm.set_postfix(
+                    loss=f"{loss.item():.4f}",
+                    lr=f"{scheduler.get_last_lr()[0]:.2e}",
+                    norm=f"{norm}"
+                )
+
+                run.log(
+                    {
+                        "loss": loss.item(),
+                        "lr": scheduler.get_last_lr()[0],
+                        "norm": norm
+                    }
+                )
             except Exception as e:
                 print(e)
 
-            if i % 5000 == 0:
+            if global_step % 5000 == 0 and i > 0:
                 print("Saving checkpoint...")
                 save_checkpoint(epoch, model, optimizer, scheduler)
 
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch {epoch + 1}: Loss - {avg_loss}")
 
-        if epoch % 25 == 0:
+        if (epoch + 1) % 25 == 0:
             save_checkpoint(epoch, model, optimizer, scheduler, latest=False)
 
 
