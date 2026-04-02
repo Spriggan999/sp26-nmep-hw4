@@ -15,7 +15,7 @@ run = wandb.init(
     entity="ysaxena_personal",
     project="sp26-nmep-hw4",
     config={
-        "learning_rate": 0.00005,
+        "learning_rate": 0.00003,
         "architecture": "transformer-lm-gpt",
         "dataset": "screenplay",
         "epochs": 100,
